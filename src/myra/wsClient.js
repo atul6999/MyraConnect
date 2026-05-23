@@ -264,19 +264,21 @@ class MyraWSClient extends EventEmitter {
           allPendingTempIds: Array.from(this.pendingRequests.keys())
         });
         
-        // Timeout after 30 seconds
+        // Timeout after configured duration (default 60 seconds)
+        const timeoutMs = config.myra.requestTimeoutMs;
+        const timeoutSeconds = timeoutMs / 1000;
         setTimeout(() => {
           if (this.pendingRequests.has(tempIdStr)) {
             logger.error('⏰ Myra request timeout', { 
               tempId: tempIdStr,
               pendingRequests: this.pendingRequests.size,
-              waitingTime: '30 seconds',
+              waitingTime: `${timeoutSeconds} seconds`,
               allPendingTempIds: Array.from(this.pendingRequests.keys())
             });
             this.pendingRequests.delete(tempIdStr);
-            reject(new Error('Request timeout - Myra did not respond within 30 seconds'));
+            reject(new Error(`Request timeout - Myra did not respond within ${timeoutSeconds} seconds`));
           }
-        }, 30000);
+        }, timeoutMs);
       }
 
       logger.info('📤 Sending message to Myra', { 

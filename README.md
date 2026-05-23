@@ -10,6 +10,8 @@ A production-grade backend service connecting WhatsApp Business API to Myra AI.
 - 📋 Multi-step booking flow
 - 🛡️ Guardrails for AI responses
 - 💾 Session management with TTL
+- 🧠 Smart routing: Travel queries → Myra, Non-travel → Gemini
+- 🤖 Gemini AI integration for non-travel conversations
 
 ## Quick Start
 
@@ -48,6 +50,9 @@ npm start
 | `MYRA_WS_URL` | Myra WebSocket URL |
 | `MYRA_DEVICE_ID` | Myra device ID |
 | `MYRA_SESSION_ID` | Myra session ID |
+| `GENAI_API_KEY` | Google Gemini API key (for non-travel responses & comparisons) |
+| `GENAI_MODEL` | Gemini model (default: gemini-1.5-flash) |
+| `GENAI_COMPARISON_ENABLED` | Enable AI comparisons (default: true) |
 
 ## API Endpoints
 
@@ -84,6 +89,7 @@ src/
 ├── session/              # Session management
 ├── whatsapp/             # WhatsApp integration
 ├── myra/                 # Myra AI client
+├── genai/                # AI comparison layer (Gemini)
 ├── logic/                # Business logic
 ├── routes/webhook.js     # Express routes
 └── app.js                # Entry point

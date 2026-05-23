@@ -238,16 +238,17 @@ async function renderHotelCards(to, hotelCards, introText = null) {
     await new Promise(resolve => setTimeout(resolve, 800));
   }
   
-  // Send each product as an image with formatted caption and booking link
+  // Send each product as an image with formatted caption and clickable booking link
   for (let i = 0; i < hotelCards.length; i++) {
     const product = hotelCards[i];
-    const caption = buildProductCaption(product, i + 1, hotelCards.length);
+    // Include booking link directly in caption (WhatsApp makes it clickable)
+    const caption = buildProductCaption(product, i + 1, hotelCards.length, true);
     
     if (product.image) {
-      // Send image with caption (URL is included in caption and will be clickable)
+      // Send image with caption (booking link in caption is clickable)
       await whatsappClient.sendImage(to, product.image, caption);
     } else {
-      // Fallback to text if no image
+      // No image - send text with clickable booking link
       await whatsappClient.sendText(to, caption);
     }
     
@@ -263,9 +264,10 @@ async function renderHotelCards(to, hotelCards, introText = null) {
  * @param {Object} product - Product object
  * @param {number} index - Current index (1-based)
  * @param {number} total - Total number of products
+ * @param {boolean} includeBookingLink - Whether to include booking link in caption (default: true)
  * @returns {string} Formatted caption
  */
-function buildProductCaption(product, index, total) {
+function buildProductCaption(product, index, total, includeBookingLink = true) {
   const parts = [];
   
   // WhatsApp image caption limit: 1024 characters
@@ -387,10 +389,15 @@ function buildProductCaption(product, index, total) {
     }
   }
   
-  // Booking link (clickable URL in WhatsApp)
-  if (product.bookingLink) {
+  // Booking link - make it prominent and clickable
+  // WhatsApp automatically makes URLs in messages clickable
+  // Put link directly in caption for instant access (no button click needed)
+  if (includeBookingLink && product.bookingLink) {
     parts.push('');
-    parts.push(`🔗 Book now: ${product.bookingLink}`);
+    // Format: "📅 Book Now" on one line, link on next line (WhatsApp makes it clickable)
+    // This is faster than buttons - user can click link immediately
+    parts.push(`📅 *Book Now:*`);
+    parts.push(product.bookingLink);
   }
   
   // Footer with product number
@@ -401,8 +408,8 @@ function buildProductCaption(product, index, total) {
   let caption = parts.join('\n');
   
   // Ensure we don't exceed WhatsApp limit
-  // Calculate space needed for URL and footer
-  const urlPart = product.bookingLink ? `\n\n🔗 Book now: ${product.bookingLink}` : '';
+  // Calculate space needed for URL (if included) and footer
+  const urlPart = (includeBookingLink && product.bookingLink) ? `\n\n🔗 Book now: ${product.bookingLink}` : '';
   const footerPart = `\n\n📋 ${index} of ${total}`;
   const reservedLength = urlPart.length + footerPart.length;
   

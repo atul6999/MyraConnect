@@ -11,9 +11,25 @@ const { normalizePhoneNumber, formatPhoneNumber } = require('../utils/phoneNumbe
 class WhatsAppClient {
   constructor() {
     this.baseUrl = `${config.whatsapp.apiUrl}/${config.whatsapp.phoneNumberId}/messages`;
-    this.headers = {
-      'Authorization': `Bearer ${config.whatsapp.accessToken}`,
+    // Headers will be built dynamically to always use the latest token
+    this._baseHeaders = {
       'Content-Type': 'application/json'
+    };
+  }
+
+  /**
+   * Get current headers with fresh token from config
+   * This ensures we always use the latest token from environment
+   * @returns {Object}
+   */
+  _getHeaders() {
+    const accessToken = config.whatsapp.accessToken;
+    if (!accessToken) {
+      logger.warn('⚠️ WA_ACCESS_TOKEN is not set in environment');
+    }
+    return {
+      ...this._baseHeaders,
+      'Authorization': `Bearer ${accessToken}`
     };
   }
 
@@ -74,6 +90,26 @@ class WhatsAppClient {
   }
 
   /**
+   * Check if error is due to invalid phone number ID
+   * @param {Object} error - Axios error
+   * @returns {boolean}
+   */
+  _isPhoneNumberIdError(error) {
+    const errorCode = error.response?.data?.error?.code;
+    const errorSubcode = error.response?.data?.error?.error_subcode;
+    const errorMessage = error.response?.data?.error?.message || '';
+    const errorType = error.response?.data?.error?.type || '';
+    
+    // Error code 100 with subcode 33 = Object doesn't exist or no permissions
+    // This usually means the phone number ID is invalid or inaccessible
+    return (errorCode === 100 && errorSubcode === 33) ||
+           errorType === 'GraphMethodException' ||
+           errorMessage.includes('does not exist') ||
+           errorMessage.includes('cannot be loaded due to missing permissions') ||
+           errorMessage.includes('does not support this operation');
+  }
+
+  /**
    * Send a message to WhatsApp
    * @param {Object} payload - WhatsApp message payload
    * @returns {Promise<Object>}
@@ -106,11 +142,44 @@ class WhatsAppClient {
       });
 
       const response = await axios.post(this.baseUrl, normalizedPayload, {
-        headers: this.headers
+        headers: this._getHeaders()
       });
       
+      // Check if message was actually accepted
+      const messageId = response.data?.messages?.[0]?.id;
+      const contactWaId = response.data?.contacts?.[0]?.wa_id;
+      
+      // Log full response for debugging
+      logger.info('✅ WhatsApp API Response', {
+        status: response.status,
+        messageId: messageId,
+        contactWaId: contactWaId,
+        contacts: response.data?.contacts,
+        to: phoneNumberDisplay,
+        normalizedTo: normalizedPayload.to,
+        hasMessageId: !!messageId,
+        responseData: JSON.stringify(response.data, null, 2)
+      });
+      
+      // Warn if contact wa_id doesn't match (might indicate number not in allowed list)
+      if (contactWaId && contactWaId !== normalizedPayload.to) {
+        logger.warn('⚠️ Contact WA ID mismatch', {
+          expected: normalizedPayload.to,
+          received: contactWaId,
+          message: 'This might indicate the phone number is not in the allowed recipient list'
+        });
+      }
+      
+      // Warn if no message ID (shouldn't happen, but good to check)
+      if (!messageId) {
+        logger.warn('⚠️ No message ID in response', {
+          responseData: response.data,
+          message: 'Message might not have been accepted by WhatsApp'
+        });
+      }
+      
       logger.debug('Message sent successfully', { 
-        messageId: response.data?.messages?.[0]?.id,
+        messageId: messageId,
         to: phoneNumberDisplay
       });
       return response.data;
@@ -122,17 +191,49 @@ class WhatsAppClient {
 
       // Special handling for token errors (expired/invalid)
       if (this._isTokenError(error)) {
+        const currentToken = config.whatsapp.accessToken;
+        const tokenPreview = currentToken ? 
+          `${currentToken.substring(0, 10)}...${currentToken.substring(currentToken.length - 5)}` : 
+          'NOT SET';
+        
         logger.error('❌ WhatsApp Access Token Error', {
           errorCode,
           errorType,
           errorMessage,
-          help: 'Your WhatsApp access token has expired or is invalid. Generate a new token from WhatsApp Business Manager and update WA_ACCESS_TOKEN in your .env file.'
+          tokenPreview,
+          tokenLength: currentToken?.length || 0,
+          help: 'Your WhatsApp access token has expired or is invalid. Generate a new token from WhatsApp Business Manager and update WA_ACCESS_TOKEN in your .env file. IMPORTANT: You must restart the application after updating the .env file for changes to take effect.'
         });
         
         // Create a custom error with more context
-        const customError = new Error(`WhatsApp access token expired or invalid. Error: ${errorMessage}. Please generate a new token from WhatsApp Business Manager.`);
+        const customError = new Error(`WhatsApp access token expired or invalid. Error: ${errorMessage}. Please generate a new token from WhatsApp Business Manager and restart the application.`);
         customError.code = errorCode || 190;
         customError.isTokenError = true;
+        customError.originalMessage = errorMessage;
+        throw customError;
+      }
+
+      // Special handling for phone number ID errors (invalid or missing permissions)
+      if (this._isPhoneNumberIdError(error)) {
+        const phoneNumberId = config.whatsapp.phoneNumberId;
+        const phoneNumberIdPreview = phoneNumberId ? 
+          `${phoneNumberId.substring(0, 5)}...${phoneNumberId.substring(phoneNumberId.length - 5)}` : 
+          'NOT SET';
+        
+        logger.error('❌ WhatsApp Phone Number ID Error', {
+          errorCode,
+          errorSubcode: errorData.error_subcode,
+          errorType,
+          errorMessage,
+          phoneNumberId: phoneNumberIdPreview,
+          phoneNumberIdLength: phoneNumberId?.length || 0,
+          help: 'Your WhatsApp phone number ID is invalid, does not exist, or your access token does not have permissions to access it. Verify WA_PHONE_NUMBER_ID in your .env file matches the phone number ID from WhatsApp Business Manager. Ensure your access token has permissions for this phone number. IMPORTANT: You must restart the application after updating the .env file.'
+        });
+        
+        // Create a custom error with more context
+        const customError = new Error(`WhatsApp phone number ID is invalid or inaccessible. Error: ${errorMessage}. Please verify WA_PHONE_NUMBER_ID in your .env file and ensure your access token has permissions for this phone number ID.`);
+        customError.code = errorCode || 100;
+        customError.isPhoneNumberIdError = true;
         customError.originalMessage = errorMessage;
         throw customError;
       }
@@ -295,7 +396,9 @@ class WhatsAppClient {
    * @param {string} to - Recipient phone number
    * @param {string} imageUrl - Image URL
    * @param {string} caption - Image caption
-   * @param {Array<{id: string, title: string}>} buttons - Up to 3 buttons
+   * @param {Array<{id: string, title: string, url?: string}>} buttons - Up to 3 buttons
+   *   If button has 'url' property, it will be a URL button that opens the link directly
+   *   Otherwise, it will be a reply button that sends the id back to webhook
    * @returns {Promise<Object>}
    */
   async sendImageWithButtons(to, imageUrl, caption, buttons) {
@@ -320,6 +423,87 @@ class WhatsAppClient {
         }
       }
     });
+  }
+
+  /**
+   * Send typing indicator (shows "typing..." in WhatsApp)
+   * @param {string} to - Recipient phone number
+   * @param {boolean} typing - true to start typing, false to stop
+   * @param {string} [messageId] - Optional message ID from incoming message (required for some API versions)
+   * @returns {Promise<Object>}
+   */
+  async sendTypingIndicator(to, typing = true, messageId = null) {
+    const normalizedTo = normalizePhoneNumber(to);
+    const phoneNumberDisplay = formatPhoneNumber(normalizedTo);
+
+    // Test mode: Skip actual API call in development
+    if (config.isDev && !config.whatsapp.accessToken) {
+      logger.info('🧪 TEST MODE: Skipping typing indicator', {
+        to: phoneNumberDisplay,
+        typing,
+        messageId
+      });
+      return { success: true };
+    }
+
+    try {
+      logger.info('📝 Sending typing indicator', {
+        to: phoneNumberDisplay,
+        normalized: normalizedTo,
+        typing,
+        messageId,
+        hasMessageId: !!messageId
+      });
+
+      const payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: normalizedTo,
+        type: 'typing',
+        typing: typing
+      };
+
+      // Include message_id if provided (some API versions require it)
+      if (messageId) {
+        payload.context = {
+          message_id: messageId
+        };
+      }
+
+      logger.debug('Typing indicator payload', {
+        payload: JSON.stringify(payload, null, 2)
+      });
+
+      const response = await axios.post(this.baseUrl, payload, {
+        headers: this._getHeaders()
+      });
+
+      logger.info('✅ Typing indicator sent successfully', {
+        to: phoneNumberDisplay,
+        typing,
+        status: response.status,
+        responseData: JSON.stringify(response.data, null, 2)
+      });
+
+      return response.data;
+    } catch (error) {
+      // Don't throw errors for typing indicators - they're not critical
+      // Just log and continue
+      const errorData = error.response?.data?.error || {};
+      const errorCode = errorData.code;
+      const errorMessage = errorData.message || error.message;
+      
+      logger.warn('⚠️ Failed to send typing indicator (non-critical)', {
+        to: phoneNumberDisplay,
+        typing,
+        messageId,
+        errorCode,
+        errorMessage,
+        errorType: errorData.type,
+        fullError: error.response?.data ? JSON.stringify(error.response.data, null, 2) : error.message
+      });
+      return { success: false, error: errorMessage, errorCode };
+    }
   }
 }
 

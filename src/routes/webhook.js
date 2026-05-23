@@ -9,6 +9,7 @@ const { handleVerification, handleIncoming } = require('../whatsapp/webhookHandl
 const { normalizeMessage } = require('../whatsapp/normalizer');
 const orchestrator = require('../logic/orchestrator');
 const logger = require('../utils/logger');
+const config = require('../config');
 
 // WhatsApp webhook verification
 router.get('/webhook', handleVerification);
@@ -52,12 +53,14 @@ router.post('/test/message', async (req, res) => {
     // Process through orchestrator (with timeout protection)
     logger.info('🔄 Starting message processing...');
     
-    // Set a timeout for the entire processing
+    // Set a timeout for the entire processing (configurable, default 70 seconds)
+    const processingTimeoutMs = config.processing.timeoutMs;
+    const processingTimeoutSeconds = processingTimeoutMs / 1000;
     const processingPromise = orchestrator.processMessage(normalizedMessage);
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => {
-        reject(new Error('Message processing timeout after 35 seconds'));
-      }, 35000);
+        reject(new Error(`Message processing timeout after ${processingTimeoutSeconds} seconds`));
+      }, processingTimeoutMs);
     });
     
     await Promise.race([processingPromise, timeoutPromise]);

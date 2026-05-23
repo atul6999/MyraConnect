@@ -163,6 +163,12 @@ function checkButtonAction(buttonId) {
     return { type: 'viewHotel', hotelId };
   }
 
+  // Book Now button (for products with booking links)
+  if (buttonId.startsWith('book_')) {
+    const productId = buttonId.replace('book_', '');
+    return { type: 'bookNow', productId };
+  }
+
   return null;
 }
 
